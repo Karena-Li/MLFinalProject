@@ -1,0 +1,171 @@
+---
+title: "Project"
+author: "Jiachen Li, Ziqi Liu"
+date: "4/23/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tree) ## Decision Tree
+library(randomForest)
+library(pROC) ## ROC
+library(e1071) ## Naive Bayes
+library(class) ## KNN
+library(nnet) ## Multi-Logistic
+```
+
+## Data
+```{r data preparation, message=FALSE, warning=FALSE}
+obesity = read.csv("ObesityDataSet_raw_and_data_sinthetic.csv")
+obesity$Gender <- ifelse(obesity$Gender == "Female", 0, 1)
+obesity$Age <- as.integer(obesity$Age)
+obesity$family_history_with_overweight <- ifelse(obesity$family_history_with_overweight == "yes", 1, 0)
+obesity$FAVC <- ifelse(obesity$FAVC == "yes", 1, 0)
+obesity$FCVC <- as.integer(obesity$FCVC)
+
+obesity$NCP <- as.integer(obesity$NCP)
+obesity$CAEC <- ifelse(obesity$CAEC == "no", 0, 
+                             ifelse(obesity$CAEC == "Sometimes", 1, 
+                                    ifelse(obesity$CAEC == "Frequently", 2, 3)))
+obesity$SMOKE <- ifelse(obesity$SMOKE == "yes", 1, 0)
+obesity$CH2O <- as.integer(obesity$CH2O)
+obesity$SCC <- ifelse(obesity$SCC == "yes", 1, 0)
+obesity$FAF <- as.integer(obesity$FAF)
+obesity$TUE <- as.integer(obesity$TUE)
+obesity$CALC <- ifelse(obesity$CALC == "no", 0, 
+                             ifelse(obesity$CALC == "Sometimes", 1, 
+                                    ifelse(obesity$CALC == "Frequently", 2, 3)))
+obesity$MTRANS <- ifelse(obesity$MTRANS == "Automobile", 1, 
+                               ifelse(obesity$MTRANS == "Motorbike", 2, 
+                                      ifelse(obesity$MTRANS == "Bike", 3, 
+                                             ifelse(obesity$MTRANS == "Walking", 5, 4))))
+obesity$NObeyesdad <- ifelse(obesity$NObeyesdad == "Insufficient_Weight", 1, 
+                             ifelse(obesity$NObeyesdad == "Normal_Weight", 2,
+                                    ifelse(obesity$NObeyesdad == "Overweight_Level_I", 3,
+                                           ifelse(obesity$NObeyesdad == "Overweight_Level_II", 4,
+                                                  ifelse(obesity$NObeyesdad == "Obesity_Type_I", 5,
+                                                         ifelse(obesity$NObeyesdad == "Obesity_Type_II", 6, 7))))))
+obesity <- obesity %>%
+  select(!Height & !Weight)
+set.seed(1)
+train = sample(dim(obesity)[1], 0.75*dim(obesity)[1])
+obesity.train = obesity[train,]
+obesity.test = obesity[-train,]
+NObeyesdad.train = obesity$NObeyesdad[train]
+NObeyesdad.test = obesity$NObeyesdad[-train]
+```
+
+
+## Decision Tree
+```{r Desicion Tree, message=FALSE, warning=FALSE}
+## Model
+obes.tree <- tree(as.factor(NObeyesdad) ~ ., data = obesity.train)
+## Prune Tree
+cv <- cv.tree(obes.tree, FUN = prune.tree)
+plot(cv$size, cv$dev ,type="b",
+     xlab = "Tree size", ylab = "Cross-validated classification error rate")
+obes.prune <- prune.tree(obes.tree , best=14)
+plot(obes.prune)
+text(obes.prune)
+prune.pred <- predict(obes.prune, obesity.test, type = "class")
+table(prune.pred, NObeyesdad.test)
+## Accuracy
+mean(prune.pred == NObeyesdad.test)
+## ROC
+roc <- roc(prune.pred, NObeyesdad.test)
+roc(prune.pred, NObeyesdad.test)$auc
+ggroc(roc, size = 1, legacy.axes = FALSE) +
+  ggtitle("ROC curve") +
+  annotate("text", x=0.5, y=0.5, label="AUC = 0.569", size=4) +
+  geom_segment(aes(x = 1, xend = 0, y = 0, yend = 1), linetype="dashed")
+```
+##Random Forest
+```{r RF, message=FALSE, warning=FALSE}
+set.seed(1)
+## Model
+obes.rf = randomForest(as.factor(NObeyesdad) ~ ., data = obesity.train, mtry = 4, importance =TRUE)
+importance (obes.rf)
+rf.pred = predict(obes.rf, obesity.test)
+table(NObeyesdad.test, rf.pred)
+## Accuracy
+mean(NObeyesdad.test == rf.pred)
+## ROC
+roc <- roc(rf.pred, NObeyesdad.test)
+roc(rf.pred, NObeyesdad.test)$auc
+ggroc(roc, size = 1, legacy.axes = FALSE) +
+  ggtitle("ROC curve") +
+  annotate("text", x=0.7, y=0.7, label="AUC = 0.8648", size=4) +
+  geom_segment(aes(x = 1, xend = 0, y = 0, yend = 1), linetype="dashed")
+```
+
+## KNN
+```{r KNN, message=FALSE, warning=FALSE}
+## best k=3
+set.seed(12345)
+validation <- sample(nrow(obesity.train), 0.5*nrow(obesity.train))
+K_seq <- seq(from = 3, to = 99, by = 1)
+len <- length(K_seq)
+val_err_seq <- rep(0,len)
+for(j in 1:len){
+   K <- K_seq[j]
+   knn.pred = knn(obesity.train[validation,], obesity.train[-validation,], NObeyesdad.train[validation], k = K)
+   val_err_seq[j] <- mean(knn.pred != NObeyesdad.train[-validation])
+}
+par(mfrow=c(1,1))
+plot(K_seq, val_err_seq)
+opt_ind <- max(which(val_err_seq == min(val_err_seq)))
+opt_K <- K_seq[opt_ind]
+## Model
+knn.test.pred <- knn(obesity.train, obesity.test, NObeyesdad.train, k=opt_K)
+table(knn.test.pred, NObeyesdad.test)
+## Accuracy
+mean(knn.test.pred == NObeyesdad.test)
+## ROC
+roc <- roc(knn.test.pred, NObeyesdad.test)
+roc(knn.test.pred, NObeyesdad.test)$auc
+ggroc(roc, size = 1, legacy.axes = FALSE) +
+  ggtitle("ROC curve") +
+  annotate("text", x=0.7, y=0.75, label="AUC = 0.9224", size=4) +
+  geom_segment(aes(x = 1, xend = 0, y = 0, yend = 1), linetype="dashed")
+```
+
+## Logistic
+```{r Logistic, message=FALSE, warning=FALSE}
+# Model
+obes.logistic <- multinom(NObeyesdad ~ ., data = obesity.train)
+summary(obes.logistic)
+coef(obes.logistic)
+# Coefficient
+z <- summary(obes.logistic)$coefficients/summary(obes.logistic)$standard.errors
+p <- (1 - pnorm(abs(z), 0, 1))*2
+p
+## Relative risk
+exp(coef(obes.logistic))
+## Prediction
+logistic.pred <- predict(obes.logistic, newdata = obesity.test)
+table(NObeyesdad.test, logistic.pred)
+## accuracy
+mean(logistic.pred == obesity.test$NObeyesdad)
+## ROC
+roc <- roc(logistic.pred, NObeyesdad.test)
+roc(logistic.pred, NObeyesdad.test)$auc
+ggroc(roc, size = 1, legacy.axes = FALSE) +
+  ggtitle("ROC curve") +
+  annotate("text", x=0.5, y=0.5, label="AUC = 0.6842", size=4) +
+  geom_segment(aes(x = 1, xend = 0, y = 0, yend = 1), linetype="dashed")
+```
+
+```{r ROC, message=FALSE, warning=FALSE}
+roc1 <- roc(prune.pred, NObeyesdad.test)
+roc2 <- roc(rf.pred, NObeyesdad.test, smooth=F)
+roc3 <- roc(knn.test.pred, NObeyesdad.test)
+roc4 <- roc(logistic.pred, NObeyesdad.test)
+ggroc(list("Decision Tree"=roc1, "Random Forest"=roc2, "KNN"=roc3, "Multinomial Logistic"=roc4)) + 
+  geom_segment(aes(x = 1, xend = 0, y = 0, yend = 1), color="grey", linetype="dashed") +
+  annotate("text", x=0.75, y=1, label="AUC = 0.9224", size=3) +
+  annotate("text", x=0.75, y=0.9, label="AUC = 0.8648", size=3) +
+  annotate("text", x=0.75, y=0.525, label="AUC = 0.6842", size=3) +
+  annotate("text", x=0.75, y=0.375, label="AUC = 0.569", size=3)
+```
